@@ -1223,20 +1223,33 @@ $v = time();
     }
 
     // -------------------------------------------------------------
+    // Screen Management Helper (Guarantees only 1 screen is visible)
+    // -------------------------------------------------------------
+    function showScreen(screenId) {
+      const screens = ['screenOnboarding', 'screenUnlock', 'screenDashboard'];
+      screens.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = (id === screenId) ? 'block' : 'none';
+      });
+
+      const isUnlocked = (screenId === 'screenDashboard');
+      const btnLock = document.getElementById('btnLockVault');
+      const btnAdd = document.querySelector('.btn-action-primary');
+      const btnSync = document.getElementById('btnSyncModal');
+      if (btnLock) btnLock.style.display = isUnlocked ? 'flex' : 'none';
+      if (btnAdd) btnAdd.style.display = isUnlocked ? 'inline-flex' : 'none';
+      if (btnSync) btnSync.style.display = isUnlocked ? 'flex' : 'none';
+    }
+
+    // -------------------------------------------------------------
     // App Initialization
     // -------------------------------------------------------------
     async function initApp() {
       const encryptedVault = localStorage.getItem(VAULT_STORAGE_KEY);
       if (!encryptedVault) {
-        // Primeiro acesso: Criar PIN
-        document.getElementById('screenOnboarding').style.display = 'block';
-        document.getElementById('screenUnlock').style.display = 'none';
-        document.getElementById('screenDashboard').style.display = 'none';
+        showScreen('screenOnboarding');
       } else {
-        // Já existe cofre: Bloqueado
-        document.getElementById('screenOnboarding').style.display = 'none';
-        document.getElementById('screenUnlock').style.display = 'block';
-        document.getElementById('screenDashboard').style.display = 'none';
+        showScreen('screenUnlock');
       }
     }
 
@@ -1299,8 +1312,7 @@ $v = time();
 
       await saveVault();
 
-      document.getElementById('screenOnboarding').style.display = 'none';
-      document.getElementById('screenDashboard').style.display = 'block';
+      showScreen('screenDashboard');
       showToast('Cofre Zero-Knowledge inicializado com sucesso!');
       renderAccounts();
       startTOTPLoop();
@@ -1358,8 +1370,7 @@ $v = time();
 
       unlockPin = "";
       updateUnlockDots();
-      document.getElementById('screenUnlock').style.display = 'none';
-      document.getElementById('screenDashboard').style.display = 'block';
+      showScreen('screenDashboard');
       showToast('Cofre desbloqueado.');
       renderAccounts();
       startTOTPLoop();
@@ -1368,10 +1379,9 @@ $v = time();
     function lockVault() {
       currentKey = null;
       vault = [];
-      document.getElementById('screenDashboard').style.display = 'none';
-      document.getElementById('screenUnlock').style.display = 'block';
       unlockPin = "";
       updateUnlockDots();
+      showScreen('screenUnlock');
     }
 
     // -------------------------------------------------------------
@@ -1421,8 +1431,7 @@ $v = time();
       await saveVault();
 
       closeRecoveryModal();
-      document.getElementById('screenUnlock').style.display = 'none';
-      document.getElementById('screenDashboard').style.display = 'block';
+      showScreen('screenDashboard');
       showToast('PIN redefinido com sucesso! Cofre desbloqueado.');
       renderAccounts();
       startTOTPLoop();
