@@ -341,6 +341,9 @@ $v = time();
       align-items: center;
       justify-content: space-between;
       padding: 0 20px;
+      gap: 12px;
+      box-sizing: border-box;
+      width: 100%;
     }
     .brand-wrap {
       display: flex;
@@ -348,10 +351,13 @@ $v = time();
       gap: 12px;
       text-decoration: none;
       color: #fff;
+      min-width: 0;
+      flex-shrink: 1;
     }
     .brand-icon {
       width: 40px;
       height: 40px;
+      min-width: 40px;
       border-radius: 12px;
       background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
       display: flex;
@@ -359,6 +365,11 @@ $v = time();
       justify-content: center;
       font-size: 19px;
       box-shadow: 0 4px 14px var(--primary-glow);
+      flex-shrink: 0;
+    }
+    .brand-info {
+      min-width: 0;
+      overflow: hidden;
     }
     .brand-info h1 {
       font-size: 1.15rem;
@@ -367,6 +378,7 @@ $v = time();
       display: flex;
       align-items: center;
       gap: 8px;
+      white-space: nowrap;
     }
     .brand-info .badge-zk {
       font-size: 10px;
@@ -378,20 +390,26 @@ $v = time();
       color: var(--success);
       text-transform: uppercase;
       letter-spacing: 0.05em;
+      white-space: nowrap;
     }
     .brand-info p {
       font-size: 0.72rem;
       color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .header-actions {
       display: flex;
       align-items: center;
       gap: 10px;
+      flex-shrink: 0;
     }
     .btn-icon {
       width: 38px;
       height: 38px;
+      min-width: 38px;
       border-radius: 10px;
       background: rgba(255, 255, 255, 0.05);
       border: 1px solid var(--border-color);
@@ -402,6 +420,7 @@ $v = time();
       justify-content: center;
       font-size: 15px;
       transition: all 0.2s;
+      flex-shrink: 0;
     }
     .btn-icon:hover {
       color: #fff;
@@ -422,10 +441,81 @@ $v = time();
       cursor: pointer;
       box-shadow: 0 4px 12px var(--primary-glow);
       transition: all 0.2s;
+      flex-shrink: 0;
     }
     .btn-action-primary:hover {
       filter: brightness(1.1);
       transform: translateY(-1px);
+    }
+
+    @media (max-width: 640px) {
+      header.app-header {
+        height: 60px;
+        padding: 0 12px;
+        gap: 8px;
+      }
+      .brand-wrap {
+        gap: 8px;
+      }
+      .brand-icon {
+        width: 34px;
+        height: 34px;
+        min-width: 34px;
+      }
+      .brand-info h1 {
+        font-size: 1.05rem;
+      }
+      .brand-info .badge-zk {
+        display: none;
+      }
+      .brand-info p {
+        display: none;
+      }
+      .header-actions {
+        gap: 6px;
+      }
+      .btn-icon {
+        width: 36px;
+        height: 36px;
+        min-width: 36px;
+        font-size: 14px;
+      }
+      .header-actions .btn-action-primary {
+        width: 36px;
+        height: 36px;
+        min-width: 36px;
+        padding: 0;
+        justify-content: center;
+        border-radius: 10px;
+        font-size: 15px;
+      }
+      .header-actions .btn-action-primary span {
+        display: none !important;
+      }
+    }
+
+    @media (max-width: 380px) {
+      header.app-header {
+        padding: 0 8px;
+        gap: 6px;
+      }
+      .brand-icon {
+        width: 30px;
+        height: 30px;
+        min-width: 30px;
+      }
+      .brand-info h1 {
+        font-size: 0.95rem;
+      }
+      .header-actions {
+        gap: 4px;
+      }
+      .btn-icon, .header-actions .btn-action-primary {
+        width: 32px;
+        height: 32px;
+        min-width: 32px;
+        font-size: 13px;
+      }
     }
 
     /* Main App Layout */
