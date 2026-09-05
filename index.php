@@ -2141,7 +2141,7 @@ $v = time();
       const video = document.getElementById('cameraVideo');
       if (video.readyState === video.HAVE_ENOUGH_DATA) {
         const canvas = document.getElementById('qrCanvas');
-        const ctx = canvas.getContext('2d');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
         canvas.height = video.videoHeight;
         canvas.width = video.videoWidth;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -2167,7 +2167,7 @@ $v = time();
         const img = new Image();
         img.onload = () => {
           const canvas = document.getElementById('qrCanvas');
-          const ctx = canvas.getContext('2d');
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
           canvas.width = img.width;
           canvas.height = img.height;
           ctx.drawImage(img, 0, 0);
