@@ -1212,27 +1212,22 @@ $v = time();
       </div>
 
       <div style="margin-bottom: 20px;">
-        <div style="background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 12px; padding: 14px; margin-bottom: 16px;">
+        <div style="background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 12px; padding: 14px; margin-bottom: 12px;">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-            <span style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--accent); font-weight: 700;">Conta Vinculada</span>
+            <span style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--accent); font-weight: 700;">Conta Google Conectada</span>
             <span class="sync-badge" style="background: rgba(16, 185, 129, 0.2); color: var(--success); font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 600;">
-              <i class="fas fa-check-circle"></i> Nuvem Ativa
+              <i class="fas fa-check-circle"></i> Sincronização Ativa
             </span>
           </div>
           <div id="modalSyncEmailDisplay" style="font-size: 0.95rem; font-weight: 700; color: #fff; margin-bottom: 4px;">fbr4g4@gmail.com</div>
           <p style="font-size: 0.78rem; color: var(--text-muted); line-height: 1.4; margin: 0;">
-            Seu cofre é sincronizado automaticamente com a Extensão do Chrome e outros navegadores usando criptografia ponta a ponta (AES-256-GCM).
+            Seu cofre é sincronizado automaticamente em segundo plano com a Nuvem Zero-Knowledge e a Extensão Chrome.
           </p>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
-          <button class="btn-action-primary" style="justify-content: center; padding: 10px; font-size: 0.85rem;" onclick="handleManualSync()">
-            <i class="fas fa-sync-alt"></i> Sincronizar Agora
-          </button>
-          <button class="btn-action-primary" style="justify-content: center; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: var(--danger); box-shadow: none; padding: 10px; font-size: 0.85rem;" onclick="disconnectCloud(); closeSyncModal();">
-            <i class="fas fa-sign-out-alt"></i> Trocar Conta
-          </button>
-        </div>
+        <button class="btn-action-primary" style="width: 100%; justify-content: center; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: var(--danger); box-shadow: none; padding: 10px; font-size: 0.85rem;" onclick="disconnectCloud(); closeSyncModal();">
+          <i class="fas fa-sign-out-alt"></i> Desconectar / Trocar Conta Google
+        </button>
       </div>
 
       <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 20px 0;">
@@ -1328,7 +1323,9 @@ $v = time();
     // -------------------------------------------------------------
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js').catch(err => console.log('SW reg error:', err));
+        navigator.serviceWorker.register('sw.js?v=<?= $v ?>', { updateViaCache: 'none' })
+          .then(reg => reg.update())
+          .catch(err => console.log('SW reg error:', err));
       });
     }
 
