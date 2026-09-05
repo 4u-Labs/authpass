@@ -1462,9 +1462,14 @@ $v = time();
 
         const secretBytes = new Uint8Array(secretHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
 
-        const hashAlgo = algorithm.toUpperCase().replace("SHA", "SHA-");
+        let hashName = "SHA-1";
+        const upper = (algorithm || "SHA-1").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        if (upper === "SHA256") hashName = "SHA-256";
+        else if (upper === "SHA512") hashName = "SHA-512";
+        else hashName = "SHA-1";
+
         const key = await crypto.subtle.importKey(
-          "raw", secretBytes, { name: "HMAC", hash: { name: hashAlgo.includes("-") ? hashAlgo : "SHA-1" } }, false, ["sign"]
+          "raw", secretBytes, { name: "HMAC", hash: { name: hashName } }, false, ["sign"]
         );
         const signature = await crypto.subtle.sign("HMAC", key, timeBuffer);
         const hash = new Uint8Array(signature);
@@ -1479,6 +1484,7 @@ $v = time();
         const otp = binary % mod;
         return otp.toString().padStart(digits, '0');
       } catch (e) {
+        console.error("Erro ao gerar TOTP:", e);
         return "000000";
       }
     }
