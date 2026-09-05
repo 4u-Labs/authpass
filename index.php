@@ -1026,20 +1026,12 @@ $v = time();
         </div>
       </div>
 
-      <!-- Botão Oficial de Login com Google (Google Identity Services) -->
-      <div id="auth-google-quick-btn" style="margin-bottom: 14px;">
-        <div id="auth-google-btn-container" style="display:flex; justify-content:center; min-height:44px; margin-bottom:4px;"></div>
-        <div style="display:flex; align-items:center; gap:10px; margin: 12px 0 8px 0;">
-          <div style="flex:1; height:1px; background:rgba(255,255,255,0.1);"></div>
-          <span style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">ou com E-mail e PIN</span>
-          <div style="flex:1; height:1px; background:rgba(255,255,255,0.1);"></div>
-        </div>
-      </div>
-
-      <!-- Campo E-mail / Usuário -->
-      <div class="form-group" id="auth-email-group" style="margin-bottom: 16px; text-align: left;">
-        <label class="form-label" for="auth-email" style="display:block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 6px;">E-mail da Conta</label>
-        <input type="email" id="auth-email" class="form-input" style="width: 100%; padding: 10px 14px; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: 8px; color: #fff;" placeholder="seuemail@gmail.com" value="fbr4g4@gmail.com" onchange="handleEmailChange(this.value)">
+      <!-- Bloco Obrigatório de Login com Google (Google Identity Services) -->
+      <div id="auth-google-prompt" style="margin: 20px 0 16px 0;">
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 18px;">
+          Para acessar ou sincronizar suas contas 2FA com retenção zero, entre com sua Conta Google:
+        </p>
+        <div id="auth-google-btn-container" style="display:flex; justify-content:center; min-height:44px; margin-bottom:8px;"></div>
       </div>
 
       <!-- PIN Input Section -->
@@ -1622,10 +1614,10 @@ $v = time();
       const authName = document.getElementById('auth-connected-name');
       const authEmail = document.getElementById('auth-connected-email');
       const authAv = document.getElementById('auth-connected-avatar');
-      const authGoogleBtn = document.getElementById('auth-google-quick-btn');
-      const authEmailGroup = document.getElementById('auth-email-group');
+      const googlePrompt = document.getElementById('auth-google-prompt');
+      const pinSection = document.getElementById('authPinSection');
 
-      if (user && (token || user.email)) {
+      if (user && token && user.email) {
         if (authConnected) {
           authConnected.style.display = 'flex';
           if (authName) authName.textContent = user.name || 'Conta Conectada';
@@ -1639,17 +1631,14 @@ $v = time();
             }
           }
         }
-        if (authGoogleBtn) authGoogleBtn.style.display = 'none';
-        if (authEmailGroup) authEmailGroup.style.display = 'none';
+        if (googlePrompt) googlePrompt.style.display = 'none';
+        if (pinSection) pinSection.style.display = 'block';
         updateSyncUI(true, `Nuvem 4U Conectada (${user.email})`);
       } else {
         if (authConnected) authConnected.style.display = 'none';
-        if (authGoogleBtn) authGoogleBtn.style.display = 'block';
-        if (authEmailGroup) authEmailGroup.style.display = 'block';
-        const emailInp = document.getElementById('auth-email');
-        const savedEmail = localStorage.getItem('authpass_active_email') || 'fbr4g4@gmail.com';
-        if (emailInp && !emailInp.value) emailInp.value = savedEmail;
-        updateSyncUI(false, 'Cofre Local Ativo (Zero-Knowledge)');
+        if (googlePrompt) googlePrompt.style.display = 'block';
+        if (pinSection) pinSection.style.display = 'none';
+        updateSyncUI(false, 'Login Google Necessário');
       }
     }
 
