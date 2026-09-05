@@ -244,7 +244,7 @@ $googleClientId = '86183940183-qegicgt1h8biud5vagdhuuug6i68q5km.apps.googleuserc
 $v = time();
 ?>
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-safepass-ignore="true">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -977,7 +977,7 @@ $v = time();
     }
   </style>
 </head>
-<body>
+<body data-safepass-ignore="true">
   <div class="ambient-bg"></div>
 
   <!-- App Header -->
@@ -1273,7 +1273,7 @@ $v = time();
         </div>
         <div class="form-group">
           <label class="form-label">Novo PIN (6 dígitos)</label>
-          <input type="password" maxlength="6" id="recoveryNewPin" class="form-input" placeholder="Ex: 123456" required>
+          <input type="password" maxlength="6" id="recoveryNewPin" class="form-input" placeholder="Ex: 123456" autocomplete="off" data-safepass-ignore="true" required>
         </div>
         <button type="submit" class="btn-action-primary" style="width: 100%; justify-content: center; padding: 12px;">
           <i class="fas fa-unlock"></i> Redefinir PIN e Desbloquear
