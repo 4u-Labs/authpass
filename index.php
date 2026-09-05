@@ -257,8 +257,11 @@ $v = time();
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
-  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" type="image/x-icon" href="favicon.ico?v=<?php echo $v; ?>">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png?v=<?php echo $v; ?>">
+  <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png?v=<?php echo $v; ?>">
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=<?php echo $v; ?>">
+  <link rel="apple-touch-icon" href="icon-192.png?v=<?php echo $v; ?>">
 
   <!-- Fonts & Icons -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -980,7 +983,9 @@ $v = time();
   <!-- App Header -->
   <header class="app-header">
     <a href="./" class="brand-wrap">
-      <div class="brand-icon"><i class="fas fa-shield-halved"></i></div>
+      <div class="brand-icon" style="padding: 2px; overflow: hidden; background: transparent; box-shadow: none;">
+        <img src="icon-192.png?v=<?php echo $v; ?>" alt="AuthPass" style="width: 100%; height: 100%; object-fit: contain; border-radius: 10px;">
+      </div>
       <div class="brand-info">
         <h1>AuthPass <span class="badge-zk">Zero-Knowledge</span></h1>
         <p>Autenticador 2FA • Retenção Zero</p>
@@ -1005,8 +1010,8 @@ $v = time();
     <!-- SCREEN 1: UNIFIED AUTH & UNLOCK SCREEN (Zero-Knowledge) -->
     <div id="screenAuth" class="screen-card" style="display: block;">
       
-      <div class="screen-icon-wrap" id="authLogoWrap" style="background: rgba(99, 102, 241, 0.12); border-color: rgba(99, 102, 241, 0.3); color: var(--primary);">
-        <i class="fas fa-shield-halved"></i>
+      <div class="screen-icon-wrap" id="authLogoWrap" style="background: transparent; border: none; padding: 0; width: 76px; height: 76px; margin: 0 auto 16px;">
+        <img src="icon-512.png?v=<?php echo $v; ?>" alt="AuthPass" style="width: 100%; height: 100%; object-fit: contain; border-radius: 20px; box-shadow: 0 12px 30px rgba(99, 102, 241, 0.35);">
       </div>
       <h2 class="screen-title" id="authScreenTitle">Auth<span>Pass</span></h2>
       <p class="screen-subtitle" id="authScreenSubtitle">Autenticador 2FA pessoal com criptografia Zero-Knowledge ponta a ponta.</p>
