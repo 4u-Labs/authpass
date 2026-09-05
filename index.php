@@ -3,6 +3,7 @@ header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
 header("Cache-Control: post-check=0, pre-check=0", false);
 header("Pragma: no-cache");
 header("Expires: Mon, 26 Jul 1997 05:00:00 GMT");
+header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
 $v = time();
 ?>
 <!DOCTYPE html>
@@ -751,7 +752,32 @@ $v = time();
 
   <!-- Main Container -->
   <main class="app-main">
-    
+
+    <!-- SCREEN 0: CONECTAR GOOGLE (Backup em Nuvem na pasta AuthPass) -->
+    <div id="screenGoogleAuth" class="screen-card" style="display: none;">
+      <div class="screen-icon-wrap" style="background: rgba(52, 168, 83, 0.12); border-color: rgba(52, 168, 83, 0.3); color: #34a853;">
+        <i class="fab fa-google"></i>
+      </div>
+      <h2 class="screen-title">Sincronização & Backup</h2>
+      <p class="screen-subtitle">Conecte sua conta Google para salvar e sincronizar seu cofre automaticamente na pasta <strong>AuthPass</strong> do seu Google Drive.</p>
+
+      <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 12px; padding: 12px 16px; margin-bottom: 24px; text-align: left; display: flex; align-items: center; gap: 12px;">
+        <i class="fas fa-shield-halved" style="color: var(--accent); font-size: 20px;"></i>
+        <div style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.4;">
+          <strong>100% Criptografia Zero-Knowledge:</strong> Suas chaves 2FA são criptografadas com seu PIN antes de saírem do dispositivo. Nem o Google nem o servidor da 4U.IA.BR têm acesso a elas.
+        </div>
+      </div>
+
+      <button class="btn-action-primary" id="btnConnectGoogleMain" style="width: 100%; justify-content: center; padding: 14px; font-size: 0.95rem; background: #1f293d; border: 1px solid rgba(255,255,255,0.2); box-shadow: 0 4px 16px rgba(0,0,0,0.4); margin-bottom: 14px;" onclick="startGoogleAuthFlow()">
+        <svg style="width: 20px; height: 20px; margin-right: 8px;" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>
+        <span>Continuar com o Google</span>
+      </button>
+
+      <button style="background: transparent; border: none; color: var(--text-muted); font-size: 0.8rem; cursor: pointer; text-decoration: underline;" onclick="continueWithoutGoogle()">
+        Continuar apenas neste dispositivo (Sem conta Google)
+      </button>
+    </div>
+
     <!-- SCREEN 1: ONBOARDING / CONFIGURAR PIN (Primeiro Acesso) -->
     <div id="screenOnboarding" class="screen-card" style="display: none;">
       <div class="screen-icon-wrap"><i class="fas fa-shield-cat"></i></div>
@@ -1223,10 +1249,21 @@ $v = time();
     }
 
     // -------------------------------------------------------------
+    // Google OAuth & Google Drive Sync Config
+    // -------------------------------------------------------------
+    const GOOGLE_CLIENT_ID = '86183940183-qegicgt1h8biud5vagdhuuug6i68q5km.apps.googleusercontent.com';
+    const GDRIVE_FOLDER_NAME = 'AuthPass';
+    const GDRIVE_VAULT_FILE = 'authpass_vault.json';
+    const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile';
+    const GDRIVE_TOKEN_KEY = 'authpass_gdrive_token';
+    let googleTokenClient = null;
+    let gdriveFolderId = localStorage.getItem('authpass_gdrive_folder_id') || null;
+
+    // -------------------------------------------------------------
     // Screen Management Helper (Guarantees only 1 screen is visible)
     // -------------------------------------------------------------
     function showScreen(screenId) {
-      const screens = ['screenOnboarding', 'screenUnlock', 'screenDashboard'];
+      const screens = ['screenGoogleAuth', 'screenOnboarding', 'screenUnlock', 'screenDashboard'];
       screens.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = (id === screenId) ? 'block' : 'none';
@@ -1234,7 +1271,7 @@ $v = time();
 
       const isUnlocked = (screenId === 'screenDashboard');
       const btnLock = document.getElementById('btnLockVault');
-      const btnAdd = document.querySelector('.btn-action-primary');
+      const btnAdd = document.querySelector('.header-actions .btn-action-primary');
       const btnSync = document.getElementById('btnSyncModal');
       if (btnLock) btnLock.style.display = isUnlocked ? 'flex' : 'none';
       if (btnAdd) btnAdd.style.display = isUnlocked ? 'inline-flex' : 'none';
@@ -1242,14 +1279,249 @@ $v = time();
     }
 
     // -------------------------------------------------------------
-    // App Initialization
+    // Google Authentication Flow (Entrar com Google)
     // -------------------------------------------------------------
-    async function initApp() {
+    function initGoogleClient() {
+      if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
+        setTimeout(initGoogleClient, 300);
+        return;
+      }
+      try {
+        googleTokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: GOOGLE_SCOPES,
+          callback: async (tokenResponse) => {
+            if (tokenResponse && tokenResponse.access_token) {
+              const token = tokenResponse.access_token;
+              localStorage.setItem(GDRIVE_TOKEN_KEY, token);
+              showToast('Conta Google conectada!');
+              await syncGoogleDriveOnLogin(token);
+            }
+          }
+        });
+      } catch (err) {
+        console.warn('Erro ao inicializar Google Token Client:', err);
+      }
+    }
+
+    function startGoogleAuthFlow() {
+      if (!googleTokenClient) {
+        initGoogleClient();
+      }
+      if (googleTokenClient) {
+        googleTokenClient.requestAccessToken({ prompt: 'consent' });
+      } else {
+        showToast('Carregando serviço do Google... aguarde um instante.');
+      }
+    }
+
+    function continueWithoutGoogle() {
+      localStorage.setItem('authpass_skip_google', 'true');
       const encryptedVault = localStorage.getItem(VAULT_STORAGE_KEY);
       if (!encryptedVault) {
         showScreen('screenOnboarding');
       } else {
         showScreen('screenUnlock');
+      }
+    }
+
+    // Busca ou cria a pasta AuthPass no Google Drive
+    async function getOrCreateAuthPassDriveFolder(token) {
+      if (gdriveFolderId) return gdriveFolderId;
+      try {
+        const query = encodeURIComponent(`name = '${GDRIVE_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`);
+        const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (searchRes.ok) {
+          const data = await searchRes.json();
+          if (data.files && data.files.length > 0) {
+            gdriveFolderId = data.files[0].id;
+            localStorage.setItem('authpass_gdrive_folder_id', gdriveFolderId);
+            return gdriveFolderId;
+          }
+        }
+        // Cria a pasta AuthPass
+        const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            name: GDRIVE_FOLDER_NAME,
+            mimeType: 'application/vnd.google-apps.folder'
+          })
+        });
+        if (createRes.ok) {
+          const folder = await createRes.json();
+          gdriveFolderId = folder.id;
+          localStorage.setItem('authpass_gdrive_folder_id', gdriveFolderId);
+          return gdriveFolderId;
+        }
+      } catch (e) {
+        console.warn('Erro na pasta Google Drive:', e);
+      }
+      return null;
+    }
+
+    // Sincroniza cofre do Google Drive logo no login
+    async function syncGoogleDriveOnLogin(token) {
+      try {
+        const folderId = await getOrCreateAuthPassDriveFolder(token);
+        if (!folderId) {
+          checkLocalVaultOrOnboard();
+          return;
+        }
+
+        const query = encodeURIComponent(`name = '${GDRIVE_VAULT_FILE}' and '${folderId}' in parents and trashed = false`);
+        const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (searchRes.ok) {
+          const data = await searchRes.json();
+          if (data.files && data.files.length > 0) {
+            const mainFile = data.files[0];
+            localStorage.setItem('authpass_gdrive_file_id', mainFile.id);
+
+            const downloadRes = await fetch(`https://www.googleapis.com/drive/v3/files/${mainFile.id}?alt=media`, {
+              headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            if (downloadRes.ok) {
+              const remoteVault = await downloadRes.json();
+              if (remoteVault.vault_encrypted && remoteVault.salt) {
+                localStorage.setItem(VAULT_STORAGE_KEY, remoteVault.vault_encrypted);
+                localStorage.setItem(SALT_STORAGE_KEY, remoteVault.salt);
+                if (remoteVault.verifier) localStorage.setItem(VERIFIER_STORAGE_KEY, remoteVault.verifier);
+                if (remoteVault.em_hash) localStorage.setItem(EM_HASH_STORAGE_KEY, remoteVault.em_hash);
+                
+                updateSyncUI(true, 'Google Drive (Pasta AuthPass)');
+                showToast('Cofre encontrado no seu Google Drive! Digite seu PIN.');
+                showScreen('screenUnlock');
+                return;
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Erro ao ler Google Drive:', err);
+      }
+      checkLocalVaultOrOnboard();
+    }
+
+    function checkLocalVaultOrOnboard() {
+      const encryptedVault = localStorage.getItem(VAULT_STORAGE_KEY);
+      if (!encryptedVault) {
+        showToast('Conta conectada! Crie seu PIN para o novo cofre.');
+        showScreen('screenOnboarding');
+      } else {
+        showScreen('screenUnlock');
+      }
+    }
+
+    // Salva cópia criptografada na pasta AuthPass do Google Drive
+    async function pushToGoogleDrive() {
+      const token = localStorage.getItem(GDRIVE_TOKEN_KEY);
+      const cipher = localStorage.getItem(VAULT_STORAGE_KEY);
+      const salt = localStorage.getItem(SALT_STORAGE_KEY);
+      const verifier = localStorage.getItem(VERIFIER_STORAGE_KEY);
+      const emHash = localStorage.getItem(EM_HASH_STORAGE_KEY);
+
+      if (!token || !cipher) return;
+
+      try {
+        const folderId = await getOrCreateAuthPassDriveFolder(token);
+        if (!folderId) return;
+
+        const payload = {
+          version: "1.0",
+          app: "AuthPass 4U.IA.BR",
+          updated_at: new Date().toISOString(),
+          vault_encrypted: cipher,
+          salt: salt,
+          verifier: verifier,
+          em_hash: emHash
+        };
+        const vaultBlob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+
+        const query = encodeURIComponent(`name = '${GDRIVE_VAULT_FILE}' and '${folderId}' in parents and trashed = false`);
+        const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (searchRes.ok) {
+          const data = await searchRes.json();
+          if (data.files && data.files.length > 0) {
+            const fileId = data.files[0].id;
+            await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+              method: 'PATCH',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+              },
+              body: vaultBlob
+            });
+            updateSyncUI(true, 'Google Drive (Pasta AuthPass Sincronizada)');
+            return;
+          }
+        }
+
+        // Se o arquivo ainda não existia, cria novo dentro da pasta AuthPass
+        const form = new FormData();
+        form.append('metadata', new Blob([JSON.stringify({
+          name: GDRIVE_VAULT_FILE,
+          parents: [folderId]
+        })], { type: 'application/json' }));
+        form.append('file', vaultBlob);
+
+        await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+          body: form
+        });
+        updateSyncUI(true, 'Google Drive (Pasta AuthPass Sincronizada)');
+      } catch (err) {
+        console.warn('Erro ao sincronizar com Google Drive:', err);
+      }
+    }
+
+    function updateSyncUI(active, text) {
+      const dot = document.getElementById('syncDot');
+      const txt = document.getElementById('syncText');
+      if (dot) dot.style.background = active ? '#34a853' : '#f59e0b';
+      if (txt) txt.textContent = text;
+    }
+
+    // -------------------------------------------------------------
+    // App Initialization
+    // -------------------------------------------------------------
+    async function initApp() {
+      initGoogleClient();
+      const token = localStorage.getItem(GDRIVE_TOKEN_KEY);
+      const skipGoogle = localStorage.getItem('authpass_skip_google');
+      const encryptedVault = localStorage.getItem(VAULT_STORAGE_KEY);
+
+      if (token) {
+        // Já tem login com Google: Tenta sincronizar ou abre direto
+        updateSyncUI(true, 'Google Drive Conectado (Pasta AuthPass)');
+        if (encryptedVault) {
+          showScreen('screenUnlock');
+          // Sincroniza em background
+          syncGoogleDriveOnLogin(token);
+        } else {
+          await syncGoogleDriveOnLogin(token);
+        }
+      } else if (skipGoogle === 'true' || encryptedVault) {
+        if (!encryptedVault) {
+          showScreen('screenOnboarding');
+        } else {
+          showScreen('screenUnlock');
+        }
+      } else {
+        // Primeira tela obrigatória: Pedir para conectar com Google!
+        showScreen('screenGoogleAuth');
       }
     }
 
@@ -1392,6 +1664,7 @@ $v = time();
       const json = JSON.stringify(vault);
       const cipher = await encryptData(json, currentKey);
       localStorage.setItem(VAULT_STORAGE_KEY, cipher);
+      pushToGoogleDrive();
     }
 
     // -------------------------------------------------------------
