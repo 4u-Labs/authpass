@@ -1211,31 +1211,36 @@ $v = time();
     </div>
   </div>
 
-  <!-- MODAL: SINCRONIZAÇÃO & GOOGLE DRIVE -->
+  <!-- MODAL: SINCRONIZAÇÃO & NUVEM ZERO-KNOWLEDGE -->
   <div class="modal-backdrop" id="modalSync">
     <div class="modal-window">
       <div class="modal-header">
-        <div class="modal-title"><i class="fab fa-google-drive" style="color: #34a853;"></i> Sincronização & Backup</div>
+        <div class="modal-title"><i class="fas fa-cloud" style="color: var(--accent);"></i> Nuvem Zero-Knowledge & Backup</div>
         <button class="modal-close" onclick="closeSyncModal()"><i class="fas fa-times"></i></button>
       </div>
 
       <div style="margin-bottom: 20px;">
-        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
-          <div style="width: 44px; height: 44px; border-radius: 12px; background: rgba(52, 168, 83, 0.15); display: flex; align-items: center; justify-content: center; font-size: 22px; color: #34a853;">
-            <i class="fab fa-google"></i>
+        <div style="background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 12px; padding: 14px; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <span style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--accent); font-weight: 700;">Conta Vinculada</span>
+            <span class="sync-badge" style="background: rgba(16, 185, 129, 0.2); color: var(--success); font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 600;">
+              <i class="fas fa-check-circle"></i> Nuvem Ativa
+            </span>
           </div>
-          <div>
-            <h4 style="font-size: 1rem; font-weight: 700; color: #fff;">Google Drive AppData</h4>
-            <p style="font-size: 0.8rem; color: var(--text-muted);">Backup automático em pasta isolada da sua conta Google.</p>
-          </div>
+          <div id="modalSyncEmailDisplay" style="font-size: 0.95rem; font-weight: 700; color: #fff; margin-bottom: 4px;">fbr4g4@gmail.com</div>
+          <p style="font-size: 0.78rem; color: var(--text-muted); line-height: 1.4; margin: 0;">
+            Seu cofre é sincronizado automaticamente com a Extensão do Chrome e outros navegadores usando criptografia ponta a ponta (AES-256-GCM).
+          </p>
         </div>
-        <p style="font-size: 0.825rem; color: #cbd5e1; line-height: 1.5; margin-bottom: 16px;">
-          Os dados são enviados <strong>100% criptografados</strong> com seu PIN. Nem o Google nem a 4U.IA.BR podem ver suas chaves.
-        </p>
 
-        <button class="btn-action-primary" style="width: 100%; justify-content: center; background: #1f293d; border: 1px solid rgba(255,255,255,0.15); box-shadow: none; margin-bottom: 12px;" onclick="handleGoogleDriveAuth()">
-          <i class="fab fa-google" style="color: #ea4335;"></i> Sincronizar com Conta Google
-        </button>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+          <button class="btn-action-primary" style="justify-content: center; padding: 10px; font-size: 0.85rem;" onclick="handleManualSync()">
+            <i class="fas fa-sync-alt"></i> Sincronizar Agora
+          </button>
+          <button class="btn-action-primary" style="justify-content: center; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: var(--danger); box-shadow: none; padding: 10px; font-size: 0.85rem;" onclick="disconnectCloud(); closeSyncModal();">
+            <i class="fas fa-sign-out-alt"></i> Trocar Conta
+          </button>
+        </div>
       </div>
 
       <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 20px 0;">
@@ -2492,10 +2497,21 @@ $v = time();
     // Sync & Backup Management
     // -------------------------------------------------------------
     function openSyncModal() {
+      const activeEmail = localStorage.getItem('authpass_active_email') || 'fbr4g4@gmail.com';
+      const display = document.getElementById('modalSyncEmailDisplay');
+      if (display) display.textContent = activeEmail;
       document.getElementById('modalSync').classList.add('active');
     }
     function closeSyncModal() {
       document.getElementById('modalSync').classList.remove('active');
+    }
+
+    async function handleManualSync() {
+      showToast('Sincronizando com a Nuvem 4U...');
+      await pullFromCloud(false);
+      await pushToCloud();
+      closeSyncModal();
+      showToast('Cofre sincronizado com sucesso!');
     }
 
     function exportBackupFile() {
@@ -2557,12 +2573,6 @@ $v = time();
         }
       };
       reader.readAsText(file);
-    }
-
-    // Google Drive Sync Trigger
-    function handleGoogleDriveAuth() {
-      triggerGoogleOAuth();
-      closeSyncModal();
     }
 
     // Initialize on DOM Ready
