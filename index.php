@@ -1,9 +1,246 @@
 <?php
+declare(strict_types=1);
+
+// ── 1. EMBEDDED API HANDLER (ZERO-KNOWLEDGE CLOUD SYNC) ───────────
+if (isset($_GET['action'])) {
+    header("Access-Control-Allow-Origin: *");
+    header("Access-Control-Allow-Methods: GET, POST, OPTIONS");
+    header("Access-Control-Allow-Headers: Content-Type, Authorization");
+    header("Content-Type: application/json; charset=utf-8");
+    header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
+
+    if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+        http_response_code(200);
+        exit;
+    }
+
+    $dbDir = __DIR__ . '/database';
+    if (!is_dir($dbDir)) {
+        @mkdir($dbDir, 0755, true);
+        @file_put_contents($dbDir . '/.htaccess', "Deny from all\n");
+    }
+    $dbPath = is_dir($dbDir) ? $dbDir . '/authpass.db' : __DIR__ . '/authpass.db';
+
+    try {
+        $pdo = new PDO('sqlite:' . $dbPath);
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        $pdo->exec('PRAGMA journal_mode=WAL');
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS vaults (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                google_id TEXT UNIQUE,
+                email TEXT UNIQUE NOT NULL,
+                display_name TEXT,
+                photo_url TEXT,
+                vault_data TEXT,
+                token TEXT UNIQUE,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_vaults_token ON vaults(token);
+            CREATE INDEX IF NOT EXISTS idx_vaults_email ON vaults(email);
+        ");
+
+        $action = $_GET['action'];
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'google_auth') {
+            $body = json_decode(file_get_contents('php://input'), true) ?? [];
+            $credential = trim($body['credential'] ?? '');
+            $email = trim($body['email'] ?? '');
+            $name = trim($body['name'] ?? '');
+            $picture = trim($body['picture'] ?? '');
+            $googleId = trim($body['google_id'] ?? '');
+
+            if ($credential) {
+                $parts = explode('.', $credential);
+                if (count($parts) === 3) {
+                    $payload = json_decode(base64_decode(strtr($parts[1], '-_', '+/')), true);
+                    if ($payload && !empty($payload['email'])) {
+                        $email = $payload['email'];
+                        $name = $payload['name'] ?? $name;
+                        $picture = $payload['picture'] ?? $picture;
+                        $googleId = $payload['sub'] ?? $googleId;
+                    }
+                }
+            }
+
+            if (!$email || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'E-mail inválido']);
+                exit;
+            }
+
+            $stmt = $pdo->prepare('SELECT * FROM vaults WHERE email = ?');
+            $stmt->execute([$email]);
+            $user = $stmt->fetch();
+
+            if ($user) {
+                $token = !empty($user['token']) ? $user['token'] : bin2hex(random_bytes(32));
+                $pdo->prepare('UPDATE vaults SET token = ?, display_name = ?, photo_url = ?, google_id = COALESCE(google_id, ?), updated_at = datetime("now") WHERE id = ?')
+                    ->execute([$token, $name ?: $user['display_name'], $picture ?: $user['photo_url'], $googleId, $user['id']]);
+                $vaultData = $user['vault_data'];
+            } else {
+                $token = bin2hex(random_bytes(32));
+                $stmt = $pdo->prepare('INSERT INTO vaults (google_id, email, display_name, photo_url, token, vault_data) VALUES (?, ?, ?, ?, ?, NULL)');
+                $stmt->execute([$googleId, $email, $name, $picture, $token]);
+                $vaultData = null;
+            }
+
+            echo json_encode([
+                'success' => true,
+                'token' => $token,
+                'user' => [
+                    'email' => $email,
+                    'name' => $name,
+                    'picture' => $picture
+                ],
+                'vault_data' => $vaultData ? json_decode($vaultData, true) : null
+            ]);
+            exit;
+        }
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action === 'email_auth' || $action === 'extension_login')) {
+            $body = json_decode(file_get_contents('php://input'), true) ?? [];
+            $email = trim(strtolower($body['email'] ?? ''));
+
+            if (!$email || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Informe um e-mail válido']);
+                exit;
+            }
+
+            $stmt = $pdo->prepare('SELECT * FROM vaults WHERE LOWER(email) = ?');
+            $stmt->execute([$email]);
+            $user = $stmt->fetch();
+
+            if ($user) {
+                $token = !empty($user['token']) ? $user['token'] : bin2hex(random_bytes(32));
+                $pdo->prepare('UPDATE vaults SET token = ?, updated_at = datetime("now") WHERE id = ?')
+                    ->execute([$token, $user['id']]);
+                $vaultData = $user['vault_data'];
+                $displayName = $user['display_name'] ?: explode('@', $email)[0];
+                $photoUrl = $user['photo_url'];
+            } else {
+                $token = bin2hex(random_bytes(32));
+                $displayName = explode('@', $email)[0];
+                $photoUrl = '';
+                $stmt = $pdo->prepare('INSERT INTO vaults (google_id, email, display_name, photo_url, token, vault_data) VALUES (NULL, ?, ?, ?, ?, NULL)');
+                $stmt->execute([$email, $displayName, $photoUrl, $token]);
+                $vaultData = null;
+            }
+
+            echo json_encode([
+                'success' => true,
+                'token' => $token,
+                'user' => [
+                    'email' => $email,
+                    'name' => $displayName,
+                    'picture' => $photoUrl
+                ],
+                'vault_data' => $vaultData ? json_decode($vaultData, true) : null
+            ]);
+            exit;
+        }
+
+        // Token or Email Auth
+        $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+        $token = null;
+        if (preg_match('/Bearer\s+(\S+)/i', $authHeader, $m)) {
+            $token = $m[1];
+        }
+        if (!$token && isset($_GET['token'])) {
+            $token = $_GET['token'];
+        }
+        
+        $body = [];
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $body = json_decode(file_get_contents('php://input'), true) ?? [];
+        }
+        $emailParam = trim(strtolower($_GET['email'] ?? ($body['email'] ?? '')));
+
+        $user = null;
+        if ($token) {
+            $stmt = $pdo->prepare('SELECT * FROM vaults WHERE token = ?');
+            $stmt->execute([$token]);
+            $user = $stmt->fetch();
+        }
+        if (!$user && $emailParam && filter_var($emailParam, FILTER_VALIDATE_EMAIL)) {
+            $stmt = $pdo->prepare('SELECT * FROM vaults WHERE LOWER(email) = ?');
+            $stmt->execute([$emailParam]);
+            $user = $stmt->fetch();
+
+            if (!$user) {
+                $newToken = bin2hex(random_bytes(32));
+                $displayName = explode('@', $emailParam)[0];
+                $pdo->prepare('INSERT INTO vaults (email, display_name, token, vault_data) VALUES (?, ?, ?, NULL)')
+                    ->execute([$emailParam, $displayName, $newToken]);
+                $stmt = $pdo->prepare('SELECT * FROM vaults WHERE LOWER(email) = ?');
+                $stmt->execute([$emailParam]);
+                $user = $stmt->fetch();
+            }
+        }
+
+        if (!$user) {
+            http_response_code(401);
+            echo json_encode(['success' => false, 'error' => 'Sessão não autorizada ou e-mail inválido.']);
+            exit;
+        }
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action === 'push' || $action === 'sync')) {
+            $body = json_decode(file_get_contents('php://input'), true) ?? [];
+            $vaultData = $body['vault_data'] ?? null;
+
+            if (!$vaultData) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Dados do cofre ausentes']);
+                exit;
+            }
+
+            $pdo->prepare('UPDATE vaults SET vault_data = ?, updated_at = datetime("now") WHERE id = ?')
+                ->execute([json_encode($vaultData), $user['id']]);
+
+            echo json_encode([
+                'success' => true,
+                'email' => $user['email'],
+                'updated_at' => time()
+            ]);
+            exit;
+        }
+
+        if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($action === 'pull' || $action === 'get')) {
+            $vaultData = $user['vault_data'] ? json_decode($user['vault_data'], true) : null;
+            echo json_encode([
+                'success' => true,
+                'vault_data' => $vaultData,
+                'user' => [
+                    'email' => $user['email'],
+                    'name' => $user['display_name'],
+                    'picture' => $user['photo_url']
+                ],
+                'updated_at' => strtotime($user['updated_at'] ?? 'now')
+            ]);
+            exit;
+        }
+
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Ação desconhecida']);
+        exit;
+
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        exit;
+    }
+}
+
+// ── 2. PAGE RENDER HEADERS ─────────────────────────────────────────
 header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
 header("Cache-Control: post-check=0, pre-check=0", false);
 header("Pragma: no-cache");
 header("Expires: Mon, 26 Jul 1997 05:00:00 GMT");
 header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
+$googleClientId = '86183940183-qegicgt1h8biud5vagdhuuug6i68q5km.apps.googleusercontent.com';
 $v = time();
 ?>
 <!DOCTYPE html>
@@ -32,7 +269,19 @@ $v = time();
   <!-- jsQR for QR Code Decoding (Camera & File) -->
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 
-  <!-- Google Identity Services (Drive Sync) -->
+  <!-- Configuração Dinâmica e Handler Global Google Identity -->
+  <script>
+    window.GOOGLE_CLIENT_ID = '<?= $googleClientId ?>';
+    window._pendingGoogleResponse = null;
+    window.handleGoogleAuthCallback = function(response) {
+      if (typeof window._realGoogleAuthHandler === 'function') {
+        window._realGoogleAuthHandler(response);
+      } else {
+        window._pendingGoogleResponse = response;
+      }
+    };
+  </script>
+  <!-- Google Identity Services -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 
   <style>
@@ -753,109 +1002,104 @@ $v = time();
   <!-- Main Container -->
   <main class="app-main">
 
-    <!-- SCREEN 0: CONECTAR GOOGLE (Backup em Nuvem na pasta AuthPass) -->
-    <div id="screenGoogleAuth" class="screen-card" style="display: none;">
-      <div class="screen-icon-wrap" style="background: rgba(52, 168, 83, 0.12); border-color: rgba(52, 168, 83, 0.3); color: #34a853;">
-        <i class="fab fa-google"></i>
+    <!-- SCREEN 1: UNIFIED AUTH & UNLOCK SCREEN (Zero-Knowledge) -->
+    <div id="screenAuth" class="screen-card" style="display: block;">
+      
+      <div class="screen-icon-wrap" id="authLogoWrap" style="background: rgba(99, 102, 241, 0.12); border-color: rgba(99, 102, 241, 0.3); color: var(--primary);">
+        <i class="fas fa-shield-halved"></i>
       </div>
-      <h2 class="screen-title">Sincronização & Backup</h2>
-      <p class="screen-subtitle">Conecte sua conta Google para salvar e sincronizar seu cofre automaticamente na pasta <strong>AuthPass</strong> do seu Google Drive.</p>
+      <h2 class="screen-title" id="authScreenTitle">Auth<span>Pass</span></h2>
+      <p class="screen-subtitle" id="authScreenSubtitle">Autenticador 2FA pessoal com criptografia Zero-Knowledge ponta a ponta.</p>
 
-      <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 12px; padding: 12px 16px; margin-bottom: 24px; text-align: left; display: flex; align-items: center; gap: 12px;">
-        <i class="fas fa-shield-halved" style="color: var(--accent); font-size: 20px;"></i>
-        <div style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.4;">
-          <strong>100% Criptografia Zero-Knowledge:</strong> Suas chaves 2FA são criptografadas com seu PIN antes de saírem do dispositivo. Nem o Google nem o servidor da 4U.IA.BR têm acesso a elas.
+      <!-- Badge de Usuário Conectado -->
+      <div id="auth-user-connected" style="display:none; align-items:center; justify-content:space-between; background:rgba(66,133,244,0.1); border:1px solid rgba(66,133,244,0.3); border-radius:12px; padding:10px 14px; margin-bottom:16px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <img id="auth-connected-avatar" src="" alt="Avatar" style="width:36px; height:36px; border-radius:50%; display:none; border:2px solid #4285f4; object-fit:cover;">
+          <div style="font-size:13px; text-align:left;">
+            <div id="auth-connected-name" style="font-weight:700; color:#fff;"></div>
+            <div id="auth-connected-email" style="font-size:11.5px; color:var(--text-muted);"></div>
+          </div>
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+          <span style="font-size:10px; background:#4285f4; color:#fff; padding:2px 8px; border-radius:20px; font-weight:700;">📁 Drive AuthPass</span>
+          <a href="javascript:void(0)" onclick="disconnectCloud()" style="font-size:10.5px; color:var(--danger); text-decoration:underline;">Trocar Conta</a>
         </div>
       </div>
 
-      <button class="btn-action-primary" id="btnConnectGoogleMain" style="width: 100%; justify-content: center; padding: 14px; font-size: 0.95rem; background: #1f293d; border: 1px solid rgba(255,255,255,0.2); box-shadow: 0 4px 16px rgba(0,0,0,0.4); margin-bottom: 14px;" onclick="startGoogleAuthFlow()">
-        <svg style="width: 20px; height: 20px; margin-right: 8px;" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>
-        <span>Continuar com o Google</span>
-      </button>
-
-      <button style="background: transparent; border: none; color: var(--text-muted); font-size: 0.8rem; cursor: pointer; text-decoration: underline;" onclick="continueWithoutGoogle()">
-        Continuar apenas neste dispositivo (Sem conta Google)
-      </button>
-    </div>
-
-    <!-- SCREEN 1: ONBOARDING / CONFIGURAR PIN (Primeiro Acesso) -->
-    <div id="screenOnboarding" class="screen-card" style="display: none;">
-      <div class="screen-icon-wrap"><i class="fas fa-shield-cat"></i></div>
-      <h2 class="screen-title">Bem-vindo ao AuthPass</h2>
-      <p class="screen-subtitle">Crie um <strong>PIN de 6 dígitos</strong> para criptografar suas chaves 2FA diretamente no seu dispositivo.</p>
-      
-      <div class="pin-display" id="onboardPinDots">
-        <div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div>
-        <div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div>
-      </div>
-
-      <div class="keypad" id="onboardKeypad">
-        <button class="keypad-btn" onclick="pressOnboardKey('1')">1</button>
-        <button class="keypad-btn" onclick="pressOnboardKey('2')">2</button>
-        <button class="keypad-btn" onclick="pressOnboardKey('3')">3</button>
-        <button class="keypad-btn" onclick="pressOnboardKey('4')">4</button>
-        <button class="keypad-btn" onclick="pressOnboardKey('5')">5</button>
-        <button class="keypad-btn" onclick="pressOnboardKey('6')">6</button>
-        <button class="keypad-btn" onclick="pressOnboardKey('7')">7</button>
-        <button class="keypad-btn" onclick="pressOnboardKey('8')">8</button>
-        <button class="keypad-btn" onclick="pressOnboardKey('9')">9</button>
-        <button class="keypad-btn" onclick="clearOnboardKey()"><i class="fas fa-trash-can" style="font-size: 15px;"></i></button>
-        <button class="keypad-btn" onclick="pressOnboardKey('0')">0</button>
-        <button class="keypad-btn" onclick="backspaceOnboardKey()"><i class="fas fa-delete-left" style="font-size: 16px;"></i></button>
-      </div>
-
-      <!-- Emergency Key Step (Shown after PIN confirmed) -->
-      <div id="stepEmergencyKey" style="display: none; margin-top: 24px; text-align: left;">
-        <h3 style="font-size: 1rem; font-weight: 700; color: #fff; margin-bottom: 8px;">
-          <i class="fas fa-triangle-exclamation" style="color: var(--warning);"></i> Guarde sua Chave de Emergência:
-        </h3>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px;">
-          Se você esquecer seu PIN ou perder seu dispositivo, esta chave é a única forma de recuperar seu cofre. Anote-a em local seguro:
-        </p>
-        <div class="recovery-box" id="emergencyKeyDisplay">AUTHPASS-XXXX-XXXX-XXXX-XXXX</div>
-        <button class="btn-action-primary" style="width: 100%; justify-content: center; margin-bottom: 12px;" onclick="copyEmergencyKey()">
-          <i class="fas fa-copy"></i> Copiar Chave de Emergência
+      <!-- Botão Rápido de Login com Google -->
+      <div id="auth-google-quick-btn" style="margin-bottom: 14px;">
+        <button type="button" class="btn-action-primary" style="background:#ffffff; color:#1f2937; border:1px solid rgba(0,0,0,0.15); font-weight:600; font-size:13.5px; width:100%; display:flex; align-items:center; justify-content:center; gap:10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" onclick="triggerGoogleOAuth()">
+          <svg style="width: 20px; height: 20px;" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>
+          <span>Entrar com Conta Google</span>
         </button>
-        <label style="display: flex; align-items: center; gap: 8px; font-size: 0.825rem; color: var(--text-muted); cursor: pointer;">
-          <input type="checkbox" id="chkSavedEmergencyKey" onchange="enableFinishOnboarding()">
-          Eu guardei minha chave de emergência em local seguro.
-        </label>
-        <button id="btnFinishOnboarding" disabled class="btn-action-primary" style="width: 100%; justify-content: center; margin-top: 14px; opacity: 0.5;" onclick="finishOnboarding()">
-          Acessar Meu Cofre <i class="fas fa-arrow-right"></i>
-        </button>
-      </div>
-    </div>
-
-    <!-- SCREEN 2: UNLOCK SCREEN (Cofre Bloqueado) -->
-    <div id="screenUnlock" class="screen-card" style="display: none;">
-      <div class="screen-icon-wrap"><i class="fas fa-lock"></i></div>
-      <h2 class="screen-title">Cofre Bloqueado</h2>
-      <p class="screen-subtitle">Digite seu PIN de 6 dígitos para acessar seus códigos 2FA.</p>
-
-      <div class="pin-display" id="unlockPinDots">
-        <div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div>
-        <div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div>
+        <div style="display:flex; align-items:center; gap:10px; margin: 14px 0 10px 0;">
+          <div style="flex:1; height:1px; background:rgba(255,255,255,0.1);"></div>
+          <span style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">ou com E-mail e PIN</span>
+          <div style="flex:1; height:1px; background:rgba(255,255,255,0.1);"></div>
+        </div>
       </div>
 
-      <div class="keypad" id="unlockKeypad">
-        <button class="keypad-btn" onclick="pressUnlockKey('1')">1</button>
-        <button class="keypad-btn" onclick="pressUnlockKey('2')">2</button>
-        <button class="keypad-btn" onclick="pressUnlockKey('3')">3</button>
-        <button class="keypad-btn" onclick="pressUnlockKey('4')">4</button>
-        <button class="keypad-btn" onclick="pressUnlockKey('5')">5</button>
-        <button class="keypad-btn" onclick="pressUnlockKey('6')">6</button>
-        <button class="keypad-btn" onclick="pressUnlockKey('7')">7</button>
-        <button class="keypad-btn" onclick="pressUnlockKey('8')">8</button>
-        <button class="keypad-btn" onclick="pressUnlockKey('9')">9</button>
-        <button class="keypad-btn" onclick="clearUnlockKey()"><i class="fas fa-trash-can" style="font-size: 15px;"></i></button>
-        <button class="keypad-btn" onclick="pressUnlockKey('0')">0</button>
-        <button class="keypad-btn" onclick="backspaceUnlockKey()"><i class="fas fa-delete-left" style="font-size: 16px;"></i></button>
+      <!-- Campo E-mail / Usuário -->
+      <div class="form-group" id="auth-email-group" style="margin-bottom: 16px; text-align: left;">
+        <label class="form-label" for="auth-email" style="display:block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 6px;">E-mail da Conta</label>
+        <input type="email" id="auth-email" class="form-input" style="width: 100%; padding: 10px 14px; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: 8px; color: #fff;" placeholder="seuemail@gmail.com" value="fbr4g4@gmail.com" onchange="handleEmailChange(this.value)">
       </div>
 
-      <div style="margin-top: 24px;">
-        <button style="background: transparent; border: none; color: var(--primary); font-size: 0.825rem; font-weight: 600; cursor: pointer; text-decoration: underline;" onclick="openRecoveryModal()">
-          <i class="fas fa-key"></i> Esqueci meu PIN (Usar Chave de Emergência)
-        </button>
+      <!-- PIN Input Section -->
+      <div id="authPinSection">
+        <p id="pinPromptText" style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px; font-weight: 500;">Digite seu PIN de 6 dígitos:</p>
+        
+        <div class="pin-display" id="authPinDots">
+          <div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div>
+          <div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div>
+        </div>
+
+        <div class="keypad" id="authKeypad">
+          <button class="keypad-btn" onclick="pressAuthKey('1')">1</button>
+          <button class="keypad-btn" onclick="pressAuthKey('2')">2</button>
+          <button class="keypad-btn" onclick="pressAuthKey('3')">3</button>
+          <button class="keypad-btn" onclick="pressAuthKey('4')">4</button>
+          <button class="keypad-btn" onclick="pressAuthKey('5')">5</button>
+          <button class="keypad-btn" onclick="pressAuthKey('6')">6</button>
+          <button class="keypad-btn" onclick="pressAuthKey('7')">7</button>
+          <button class="keypad-btn" onclick="pressAuthKey('8')">8</button>
+          <button class="keypad-btn" onclick="pressAuthKey('9')">9</button>
+          <button class="keypad-btn" onclick="clearAuthKey()"><i class="fas fa-trash-can" style="font-size: 15px;"></i></button>
+          <button class="keypad-btn" onclick="pressAuthKey('0')">0</button>
+          <button class="keypad-btn" onclick="backspaceAuthKey()"><i class="fas fa-delete-left" style="font-size: 16px;"></i></button>
+        </div>
+
+        <!-- Emergency Key Step (Shown after PIN confirmed on initial setup) -->
+        <div id="stepEmergencyKey" style="display: none; margin-top: 24px; text-align: left;">
+          <h3 style="font-size: 1rem; font-weight: 700; color: #fff; margin-bottom: 8px;">
+            <i class="fas fa-triangle-exclamation" style="color: var(--warning);"></i> Guarde sua Chave de Emergência:
+          </h3>
+          <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px;">
+            Se você esquecer seu PIN ou perder seu dispositivo, esta chave é a única forma de recuperar seu cofre. Anote-a em local seguro:
+          </p>
+          <div class="recovery-box" id="emergencyKeyDisplay">AUTHPASS-XXXX-XXXX-XXXX-XXXX</div>
+          <button class="btn-action-primary" style="width: 100%; justify-content: center; margin-bottom: 12px;" onclick="copyEmergencyKey()">
+            <i class="fas fa-copy"></i> Copiar Chave de Emergência
+          </button>
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 0.825rem; color: var(--text-muted); cursor: pointer;">
+            <input type="checkbox" id="chkSavedEmergencyKey" onchange="enableFinishOnboarding()">
+            Eu guardei minha chave de emergência em local seguro.
+          </label>
+          <button id="btnFinishOnboarding" disabled class="btn-action-primary" style="width: 100%; justify-content: center; margin-top: 14px; opacity: 0.5;" onclick="finishOnboarding()">
+            Acessar Meu Cofre <i class="fas fa-arrow-right"></i>
+          </button>
+        </div>
+
+        <!-- Recovery Link (for existing vault) -->
+        <div id="authRecoveryWrap" style="margin-top: 20px;">
+          <button style="background: transparent; border: none; color: var(--primary); font-size: 0.825rem; font-weight: 600; cursor: pointer; text-decoration: underline;" onclick="openRecoveryModal()">
+            <i class="fas fa-key"></i> Esqueci meu PIN (Usar Chave de Emergência)
+          </button>
+        </div>
+      </div>
+
+      <div style="margin-top: 20px; font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; justify-content: center; gap: 6px;">
+        <span>🛡️</span> Criptografia Militar AES-256-GCM Zero-Knowledge
       </div>
     </div>
 
@@ -1249,25 +1493,32 @@ $v = time();
     }
 
     // -------------------------------------------------------------
-    // Google OAuth & Google Drive Sync Config
+    // Google OAuth & Cloud Sync Config (SafePass Compatible)
     // -------------------------------------------------------------
-    const GOOGLE_CLIENT_ID = '86183940183-qegicgt1h8biud5vagdhuuug6i68q5km.apps.googleusercontent.com';
     const GDRIVE_FOLDER_NAME = 'AuthPass';
     const GDRIVE_VAULT_FILE = 'authpass_vault.json';
-    const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile';
     const GDRIVE_TOKEN_KEY = 'authpass_gdrive_token';
+    const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email openid';
+    
     let googleTokenClient = null;
     let gdriveFolderId = localStorage.getItem('authpass_gdrive_folder_id') || null;
+    let authPin = "";
 
     // -------------------------------------------------------------
-    // Screen Management Helper (Guarantees only 1 screen is visible)
+    // Screen Management Helper
     // -------------------------------------------------------------
     function showScreen(screenId) {
-      const screens = ['screenGoogleAuth', 'screenOnboarding', 'screenUnlock', 'screenDashboard'];
-      screens.forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.style.display = (id === screenId) ? 'block' : 'none';
-      });
+      const authScreen = document.getElementById('screenAuth');
+      const dashScreen = document.getElementById('screenDashboard');
+      
+      if (screenId === 'screenDashboard') {
+        if (authScreen) authScreen.style.display = 'none';
+        if (dashScreen) dashScreen.style.display = 'block';
+      } else {
+        if (authScreen) authScreen.style.display = 'block';
+        if (dashScreen) dashScreen.style.display = 'none';
+        checkVaultStatus();
+      }
 
       const isUnlocked = (screenId === 'screenDashboard');
       const btnLock = document.getElementById('btnLockVault');
@@ -1279,53 +1530,166 @@ $v = time();
     }
 
     // -------------------------------------------------------------
-    // Google Authentication Flow (Entrar com Google)
+    // Google OAuth (One Tap & Token Client)
     // -------------------------------------------------------------
-    function initGoogleClient() {
+    function initGoogleOAuthClient() {
       if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
-        setTimeout(initGoogleClient, 300);
+        setTimeout(initGoogleOAuthClient, 300);
         return;
       }
       try {
         googleTokenClient = google.accounts.oauth2.initTokenClient({
-          client_id: GOOGLE_CLIENT_ID,
+          client_id: window.GOOGLE_CLIENT_ID,
           scope: GOOGLE_SCOPES,
           callback: async (tokenResponse) => {
             if (tokenResponse && tokenResponse.access_token) {
-              const token = tokenResponse.access_token;
-              localStorage.setItem(GDRIVE_TOKEN_KEY, token);
-              showToast('Conta Google conectada!');
-              await syncGoogleDriveOnLogin(token);
+              localStorage.setItem(GDRIVE_TOKEN_KEY, tokenResponse.access_token);
+              await fetchGoogleUserProfile(tokenResponse.access_token);
+              await pullFromGoogleDrive(false);
             }
+          },
+          error_callback: (err) => {
+            console.error('Google OAuth error:', err);
+            showToast('Erro ao autenticar com o Google.');
           }
         });
-      } catch (err) {
-        console.warn('Erro ao inicializar Google Token Client:', err);
+      } catch (e) {
+        console.error('OAuth Error:', e);
       }
     }
 
-    function startGoogleAuthFlow() {
+    function triggerGoogleOAuth() {
       if (!googleTokenClient) {
-        initGoogleClient();
+        initGoogleOAuthClient();
       }
       if (googleTokenClient) {
-        googleTokenClient.requestAccessToken({ prompt: 'consent' });
+        googleTokenClient.requestAccessToken({ prompt: 'select_account' });
       } else {
-        showToast('Carregando serviço do Google... aguarde um instante.');
+        showToast('Inicializando serviço Google... Clique novamente.');
       }
     }
 
-    function continueWithoutGoogle() {
-      localStorage.setItem('authpass_skip_google', 'true');
-      const encryptedVault = localStorage.getItem(VAULT_STORAGE_KEY);
-      if (!encryptedVault) {
-        showScreen('screenOnboarding');
-      } else {
-        showScreen('screenUnlock');
+    async function fetchGoogleUserProfile(token) {
+      showToast('Conectando com conta Google e Google Drive...');
+      try {
+        const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) throw new Error('Falha ao obter perfil Google');
+        const profile = await res.json();
+
+        // Autentica na API do AuthPass (SQLite)
+        const authRes = await fetch('index.php?action=google_auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: profile.email,
+            name: profile.name || '',
+            picture: profile.picture || '',
+            google_id: profile.sub || ''
+          })
+        });
+
+        const data = await authRes.json();
+        if (data.success && data.token) {
+          localStorage.setItem('authpass_cloud_token', data.token);
+          localStorage.setItem('authpass_cloud_user', JSON.stringify(data.user));
+          localStorage.setItem('authpass_active_email', data.user.email);
+
+          await getOrCreateAuthPassDriveFolder(token);
+
+          if (data.vault_data) {
+            const vd = data.vault_data;
+            if (vd.vault_encrypted) localStorage.setItem(VAULT_STORAGE_KEY, vd.vault_encrypted);
+            if (vd.salt) localStorage.setItem(SALT_STORAGE_KEY, vd.salt);
+            if (vd.verifier) localStorage.setItem(VERIFIER_STORAGE_KEY, vd.verifier);
+            if (vd.em_hash) localStorage.setItem(EM_HASH_STORAGE_KEY, vd.em_hash);
+            showToast(`Conta Google conectada (${data.user.email})! Cofre pronto.`);
+          } else {
+            showToast(`Conta Google conectada (${data.user.email})!`);
+          }
+
+          updateCloudUI();
+          checkVaultStatus();
+        }
+      } catch (e) {
+        console.error(e);
+        showToast('Erro ao sincronizar perfil Google.');
       }
     }
 
-    // Busca ou cria a pasta AuthPass no Google Drive
+    function disconnectCloud() {
+      localStorage.removeItem('authpass_cloud_token');
+      localStorage.removeItem('authpass_cloud_user');
+      localStorage.removeItem(GDRIVE_TOKEN_KEY);
+      updateCloudUI();
+      checkVaultStatus();
+      showToast('Nuvem desconectada.');
+    }
+
+    function updateCloudUI() {
+      const token = localStorage.getItem('authpass_cloud_token');
+      const userStr = localStorage.getItem('authpass_cloud_user');
+      const user = userStr ? JSON.parse(userStr) : null;
+
+      const authConnected = document.getElementById('auth-user-connected');
+      const authName = document.getElementById('auth-connected-name');
+      const authEmail = document.getElementById('auth-connected-email');
+      const authAv = document.getElementById('auth-connected-avatar');
+      const authGoogleBtn = document.getElementById('auth-google-quick-btn');
+      const authEmailGroup = document.getElementById('auth-email-group');
+
+      if (user && (token || user.email)) {
+        if (authConnected) {
+          authConnected.style.display = 'flex';
+          if (authName) authName.textContent = user.name || 'Conta Conectada';
+          if (authEmail) authEmail.textContent = user.email;
+          if (authAv) {
+            if (user.picture) {
+              authAv.src = user.picture;
+              authAv.style.display = 'block';
+            } else {
+              authAv.style.display = 'none';
+            }
+          }
+        }
+        if (authGoogleBtn) authGoogleBtn.style.display = 'none';
+        if (authEmailGroup) authEmailGroup.style.display = 'none';
+        updateSyncUI(true, `Nuvem 4U & Google Drive (${user.email})`);
+      } else {
+        if (authConnected) authConnected.style.display = 'none';
+        if (authGoogleBtn) authGoogleBtn.style.display = 'block';
+        if (authEmailGroup) authEmailGroup.style.display = 'block';
+        const emailInp = document.getElementById('auth-email');
+        const savedEmail = localStorage.getItem('authpass_active_email') || 'fbr4g4@gmail.com';
+        if (emailInp && !emailInp.value) emailInp.value = savedEmail;
+        updateSyncUI(false, 'Cofre Local Ativo (Zero-Knowledge)');
+      }
+    }
+
+    async function handleEmailChange(newEmail) {
+      const email = (newEmail || '').trim().toLowerCase();
+      if (!email || !email.includes('@')) return;
+      localStorage.setItem('authpass_active_email', email);
+
+      try {
+        const res = await fetch(`index.php?action=pull&email=${encodeURIComponent(email)}`);
+        const data = await res.json();
+        if (data && data.success && data.vault_data) {
+          const vd = data.vault_data;
+          if (vd.vault_encrypted) localStorage.setItem(VAULT_STORAGE_KEY, vd.vault_encrypted);
+          if (vd.salt) localStorage.setItem(SALT_STORAGE_KEY, vd.salt);
+          if (vd.verifier) localStorage.setItem(VERIFIER_STORAGE_KEY, vd.verifier);
+          if (vd.em_hash) localStorage.setItem(EM_HASH_STORAGE_KEY, vd.em_hash);
+          showToast(`Cofre encontrado para ${email}! Digite seu PIN.`);
+          checkVaultStatus();
+        }
+      } catch(e) {}
+    }
+
+    // -------------------------------------------------------------
+    // Google Drive Folder & File Sync Engine
+    // -------------------------------------------------------------
     async function getOrCreateAuthPassDriveFolder(token) {
       if (gdriveFolderId) return gdriveFolderId;
       try {
@@ -1341,7 +1705,7 @@ $v = time();
             return gdriveFolderId;
           }
         }
-        // Cria a pasta AuthPass
+
         const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
           method: 'POST',
           headers: {
@@ -1365,14 +1729,63 @@ $v = time();
       return null;
     }
 
-    // Sincroniza cofre do Google Drive logo no login
-    async function syncGoogleDriveOnLogin(token) {
+    async function pushToGoogleDrive(vaultPayload) {
+      const token = localStorage.getItem(GDRIVE_TOKEN_KEY);
+      if (!token || !vaultPayload) return;
+
       try {
         const folderId = await getOrCreateAuthPassDriveFolder(token);
-        if (!folderId) {
-          checkLocalVaultOrOnboard();
-          return;
+        if (!folderId) return;
+
+        const vaultBlob = new Blob([JSON.stringify(vaultPayload, null, 2)], { type: 'application/json' });
+
+        const query = encodeURIComponent(`name = '${GDRIVE_VAULT_FILE}' and '${folderId}' in parents and trashed = false`);
+        const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (searchRes.ok) {
+          const data = await searchRes.json();
+          if (data.files && data.files.length > 0) {
+            const fileId = data.files[0].id;
+            await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+              method: 'PATCH',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+              },
+              body: vaultBlob
+            });
+            updateSyncUI(true, 'Google Drive (Pasta AuthPass Sincronizada)');
+            return;
+          }
         }
+
+        const form = new FormData();
+        form.append('metadata', new Blob([JSON.stringify({
+          name: GDRIVE_VAULT_FILE,
+          parents: [folderId]
+        })], { type: 'application/json' }));
+        form.append('file', vaultBlob);
+
+        await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+          body: form
+        });
+        updateSyncUI(true, 'Google Drive (Pasta AuthPass Sincronizada)');
+      } catch (err) {
+        console.warn('Erro ao sincronizar com Google Drive:', err);
+      }
+    }
+
+    async function pullFromGoogleDrive(silent = false) {
+      const token = localStorage.getItem(GDRIVE_TOKEN_KEY);
+      if (!token) return;
+
+      try {
+        const folderId = await getOrCreateAuthPassDriveFolder(token);
+        if (!folderId) return;
 
         const query = encodeURIComponent(`name = '${GDRIVE_VAULT_FILE}' and '${folderId}' in parents and trashed = false`);
         const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc`, {
@@ -1397,10 +1810,9 @@ $v = time();
                 if (remoteVault.verifier) localStorage.setItem(VERIFIER_STORAGE_KEY, remoteVault.verifier);
                 if (remoteVault.em_hash) localStorage.setItem(EM_HASH_STORAGE_KEY, remoteVault.em_hash);
                 
-                updateSyncUI(true, 'Google Drive (Pasta AuthPass)');
-                showToast('Cofre encontrado no seu Google Drive! Digite seu PIN.');
-                showScreen('screenUnlock');
-                return;
+                updateSyncUI(true, 'Google Drive (Pasta AuthPass Sincronizada)');
+                if (!silent) showToast('Cofre sincronizado do Google Drive!');
+                checkVaultStatus();
               }
             }
           }
@@ -1408,83 +1820,77 @@ $v = time();
       } catch (err) {
         console.warn('Erro ao ler Google Drive:', err);
       }
-      checkLocalVaultOrOnboard();
     }
 
-    function checkLocalVaultOrOnboard() {
-      const encryptedVault = localStorage.getItem(VAULT_STORAGE_KEY);
-      if (!encryptedVault) {
-        showToast('Conta conectada! Crie seu PIN para o novo cofre.');
-        showScreen('screenOnboarding');
-      } else {
-        showScreen('screenUnlock');
-      }
-    }
-
-    // Salva cópia criptografada na pasta AuthPass do Google Drive
-    async function pushToGoogleDrive() {
-      const token = localStorage.getItem(GDRIVE_TOKEN_KEY);
+    async function pushToCloud() {
       const cipher = localStorage.getItem(VAULT_STORAGE_KEY);
       const salt = localStorage.getItem(SALT_STORAGE_KEY);
       const verifier = localStorage.getItem(VERIFIER_STORAGE_KEY);
       const emHash = localStorage.getItem(EM_HASH_STORAGE_KEY);
+      const email = localStorage.getItem('authpass_active_email') || 'fbr4g4@gmail.com';
+      const token = localStorage.getItem('authpass_cloud_token');
 
-      if (!token || !cipher) return;
+      if (!cipher) return;
+
+      const vaultPayload = {
+        version: "1.0",
+        app: "AuthPass 4U.IA.BR",
+        updated_at: new Date().toISOString(),
+        vault_encrypted: cipher,
+        salt: salt,
+        verifier: verifier,
+        em_hash: emHash
+      };
+
+      // 1. Salva no Google Drive
+      pushToGoogleDrive(vaultPayload);
+
+      // 2. Salva na Nuvem 4U (SQLite Zero-Knowledge)
+      try {
+        const pushUrl = `index.php?action=push&email=${encodeURIComponent(email)}` + (token ? `&token=${encodeURIComponent(token)}` : '');
+        await fetch(pushUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vault_data: vaultPayload, email })
+        });
+        updateSyncUI(true, `Nuvem 4U & Google Drive (${email})`);
+      } catch (err) {
+        console.warn('Erro ao salvar na nuvem 4U:', err);
+      }
+    }
+
+    async function pullFromCloud(silent = false) {
+      const email = localStorage.getItem('authpass_active_email') || 'fbr4g4@gmail.com';
+      const token = localStorage.getItem('authpass_cloud_token');
 
       try {
-        const folderId = await getOrCreateAuthPassDriveFolder(token);
-        if (!folderId) return;
-
-        const payload = {
-          version: "1.0",
-          app: "AuthPass 4U.IA.BR",
-          updated_at: new Date().toISOString(),
-          vault_encrypted: cipher,
-          salt: salt,
-          verifier: verifier,
-          em_hash: emHash
-        };
-        const vaultBlob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-
-        const query = encodeURIComponent(`name = '${GDRIVE_VAULT_FILE}' and '${folderId}' in parents and trashed = false`);
-        const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (searchRes.ok) {
-          const data = await searchRes.json();
-          if (data.files && data.files.length > 0) {
-            const fileId = data.files[0].id;
-            await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
-              method: 'PATCH',
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-              },
-              body: vaultBlob
-            });
-            updateSyncUI(true, 'Google Drive (Pasta AuthPass Sincronizada)');
-            return;
+        const url = `index.php?action=pull&email=${encodeURIComponent(email)}` + (token ? `&token=${encodeURIComponent(token)}` : '');
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data && data.success && data.vault_data) {
+          const vd = data.vault_data;
+          let changed = false;
+          if (vd.vault_encrypted && vd.vault_encrypted !== localStorage.getItem(VAULT_STORAGE_KEY)) {
+            localStorage.setItem(VAULT_STORAGE_KEY, vd.vault_encrypted);
+            changed = true;
           }
+          if (vd.salt) localStorage.setItem(SALT_STORAGE_KEY, vd.salt);
+          if (vd.verifier) localStorage.setItem(VERIFIER_STORAGE_KEY, vd.verifier);
+          if (vd.em_hash) localStorage.setItem(EM_HASH_STORAGE_KEY, vd.em_hash);
+
+          if (changed && currentKey) {
+            const dec = await decryptData(vd.vault_encrypted, currentKey);
+            vault = JSON.parse(dec) || [];
+            renderAccounts();
+          }
+          if (!silent) showToast(`Sincronizado da Nuvem 4U (${email})!`);
         }
-
-        // Se o arquivo ainda não existia, cria novo dentro da pasta AuthPass
-        const form = new FormData();
-        form.append('metadata', new Blob([JSON.stringify({
-          name: GDRIVE_VAULT_FILE,
-          parents: [folderId]
-        })], { type: 'application/json' }));
-        form.append('file', vaultBlob);
-
-        await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}` },
-          body: form
-        });
-        updateSyncUI(true, 'Google Drive (Pasta AuthPass Sincronizada)');
       } catch (err) {
-        console.warn('Erro ao sincronizar com Google Drive:', err);
+        console.warn('Erro ao puxar da nuvem 4U:', err);
       }
+
+      // Também sincroniza do Google Drive se logado
+      await pullFromGoogleDrive(silent);
     }
 
     function updateSyncUI(active, text) {
@@ -1495,69 +1901,63 @@ $v = time();
     }
 
     // -------------------------------------------------------------
-    // App Initialization
+    // Unified PIN Keypad & Vault State Handler
     // -------------------------------------------------------------
-    async function initApp() {
-      initGoogleClient();
-      const token = localStorage.getItem(GDRIVE_TOKEN_KEY);
-      const skipGoogle = localStorage.getItem('authpass_skip_google');
-      const encryptedVault = localStorage.getItem(VAULT_STORAGE_KEY);
+    function checkVaultStatus() {
+      const stored = localStorage.getItem(VAULT_STORAGE_KEY);
+      const title = document.getElementById('pinPromptText');
+      const stepEm = document.getElementById('stepEmergencyKey');
+      const keypad = document.getElementById('authKeypad');
+      const recWrap = document.getElementById('authRecoveryWrap');
 
-      if (token) {
-        // Já tem login com Google: Tenta sincronizar ou abre direto
-        updateSyncUI(true, 'Google Drive Conectado (Pasta AuthPass)');
-        if (encryptedVault) {
-          showScreen('screenUnlock');
-          // Sincroniza em background
-          syncGoogleDriveOnLogin(token);
-        } else {
-          await syncGoogleDriveOnLogin(token);
-        }
-      } else if (skipGoogle === 'true' || encryptedVault) {
-        if (!encryptedVault) {
-          showScreen('screenOnboarding');
-        } else {
-          showScreen('screenUnlock');
-        }
+      if (!stored) {
+        if (title) title.textContent = 'Defina seu PIN de 6 dígitos para proteger suas chaves:';
+        if (recWrap) recWrap.style.display = 'none';
       } else {
-        // Primeira tela obrigatória: Pedir para conectar com Google!
-        showScreen('screenGoogleAuth');
+        if (title) title.textContent = 'Digite seu PIN de 6 dígitos para acessar seus códigos 2FA:';
+        if (recWrap) recWrap.style.display = 'block';
       }
+      if (stepEm) stepEm.style.display = 'none';
+      if (keypad) keypad.style.display = 'grid';
+      clearAuthKey();
     }
 
-    // -------------------------------------------------------------
-    // Onboarding Keypad
-    // -------------------------------------------------------------
-    function updateOnboardDots() {
-      const dots = document.querySelectorAll('#onboardPinDots .pin-dot');
+    function updateAuthDots() {
+      const dots = document.querySelectorAll('#authPinDots .pin-dot');
       dots.forEach((dot, idx) => {
-        if (idx < onboardPin.length) dot.classList.add('filled');
+        if (idx < authPin.length) dot.classList.add('filled');
         else dot.classList.remove('filled');
       });
     }
 
-    async function pressOnboardKey(num) {
-      if (onboardPin.length < 6) {
-        onboardPin += num;
-        updateOnboardDots();
-        if (onboardPin.length === 6) {
-          // PIN digitado: Gera chave de emergência
-          emergencyKey = generateRandomEmergencyKey();
-          document.getElementById('emergencyKeyDisplay').textContent = emergencyKey;
-          document.getElementById('onboardKeypad').style.display = 'none';
-          document.getElementById('stepEmergencyKey').style.display = 'block';
+    async function pressAuthKey(num) {
+      if (authPin.length < 6) {
+        authPin += num;
+        updateAuthDots();
+        if (authPin.length === 6) {
+          const stored = localStorage.getItem(VAULT_STORAGE_KEY);
+          if (!stored) {
+            // Novo cofre: gera chave de emergência e pede confirmação
+            emergencyKey = generateRandomEmergencyKey();
+            document.getElementById('emergencyKeyDisplay').textContent = emergencyKey;
+            document.getElementById('authKeypad').style.display = 'none';
+            document.getElementById('stepEmergencyKey').style.display = 'block';
+          } else {
+            // Desbloquear cofre existente
+            setTimeout(verifyAndUnlockVault, 100);
+          }
         }
       }
     }
 
-    function clearOnboardKey() {
-      onboardPin = "";
-      updateOnboardDots();
+    function clearAuthKey() {
+      authPin = "";
+      updateAuthDots();
     }
 
-    function backspaceOnboardKey() {
-      onboardPin = onboardPin.slice(0, -1);
-      updateOnboardDots();
+    function backspaceAuthKey() {
+      authPin = authPin.slice(0, -1);
+      updateAuthDots();
     }
 
     function copyEmergencyKey() {
@@ -1573,87 +1973,59 @@ $v = time();
     }
 
     async function finishOnboarding() {
-      currentKey = await deriveKeyFromPin(onboardPin);
+      currentKey = await deriveKeyFromPin(authPin);
       vault = [];
 
-      // Salva hashes e cofre vazio criptografado
-      const pinVerifier = await sha256("VERIFY:" + onboardPin);
+      const pinVerifier = await sha256("VERIFY:" + authPin);
       const emHash = await sha256("EMERGENCY:" + emergencyKey);
       localStorage.setItem(VERIFIER_STORAGE_KEY, pinVerifier);
       localStorage.setItem(EM_HASH_STORAGE_KEY, emHash);
 
       await saveVault();
 
+      clearAuthKey();
       showScreen('screenDashboard');
       showToast('Cofre Zero-Knowledge inicializado com sucesso!');
       renderAccounts();
       startTOTPLoop();
     }
 
-    // -------------------------------------------------------------
-    // Unlock Keypad
-    // -------------------------------------------------------------
-    function updateUnlockDots() {
-      const dots = document.querySelectorAll('#unlockPinDots .pin-dot');
-      dots.forEach((dot, idx) => {
-        if (idx < unlockPin.length) dot.classList.add('filled');
-        else dot.classList.remove('filled');
-      });
-    }
-
-    async function pressUnlockKey(num) {
-      if (unlockPin.length < 6) {
-        unlockPin += num;
-        updateUnlockDots();
-        if (unlockPin.length === 6) {
-          setTimeout(verifyUnlockPin, 100);
-        }
-      }
-    }
-
-    function clearUnlockKey() {
-      unlockPin = "";
-      updateUnlockDots();
-    }
-
-    function backspaceUnlockKey() {
-      unlockPin = unlockPin.slice(0, -1);
-      updateUnlockDots();
-    }
-
-    async function verifyUnlockPin() {
+    async function verifyAndUnlockVault() {
       const pinVerifier = localStorage.getItem(VERIFIER_STORAGE_KEY);
-      const enteredHash = await sha256("VERIFY:" + unlockPin);
-      if (enteredHash !== pinVerifier) {
+      const enteredHash = await sha256("VERIFY:" + authPin);
+      if (pinVerifier && enteredHash !== pinVerifier) {
         showToast('PIN incorreto! Tente novamente.');
-        unlockPin = "";
-        updateUnlockDots();
+        clearAuthKey();
         return;
       }
 
-      currentKey = await deriveKeyFromPin(unlockPin);
+      currentKey = await deriveKeyFromPin(authPin);
       const encryptedVault = localStorage.getItem(VAULT_STORAGE_KEY);
       try {
         const decryptedJson = await decryptData(encryptedVault, currentKey);
         vault = JSON.parse(decryptedJson) || [];
       } catch (e) {
-        vault = [];
+        console.error('Decryption error:', e);
+        showToast('Falha na descriptografia. Verifique o PIN.');
+        clearAuthKey();
+        return;
       }
 
-      unlockPin = "";
-      updateUnlockDots();
+      clearAuthKey();
       showScreen('screenDashboard');
-      showToast('Cofre desbloqueado.');
+      showToast('Cofre desbloqueado com sucesso!');
       renderAccounts();
       startTOTPLoop();
+
+      // Sincroniza em background
+      pullFromCloud(true);
     }
 
     function lockVault() {
       currentKey = null;
       vault = [];
-      unlockPin = "";
-      updateUnlockDots();
-      showScreen('screenUnlock');
+      clearAuthKey();
+      showScreen('screenAuth');
     }
 
     // -------------------------------------------------------------
@@ -1664,7 +2036,21 @@ $v = time();
       const json = JSON.stringify(vault);
       const cipher = await encryptData(json, currentKey);
       localStorage.setItem(VAULT_STORAGE_KEY, cipher);
-      pushToGoogleDrive();
+      await pushToCloud();
+    }
+
+    // -------------------------------------------------------------
+    // App Initialization
+    // -------------------------------------------------------------
+    async function initApp() {
+      initGoogleOAuthClient();
+      updateCloudUI();
+
+      const activeEmail = localStorage.getItem('authpass_active_email') || 'fbr4g4@gmail.com';
+      // Tenta puxar dados existentes da nuvem 4U
+      await pullFromCloud(true);
+
+      showScreen('screenAuth');
     }
 
     // -------------------------------------------------------------
@@ -2101,14 +2487,9 @@ $v = time();
       reader.readAsText(file);
     }
 
-    // Google Drive AppData Sync Placeholder
+    // Google Drive Sync Trigger
     function handleGoogleDriveAuth() {
-      showToast('Conexão direta com Google Drive iniciada via OAuth seguro.');
-      // O cofre criptografado é sincronizado na pasta privada do Drive
-      const syncDot = document.getElementById('syncDot');
-      const syncText = document.getElementById('syncText');
-      syncDot.style.background = "#34a853";
-      syncText.textContent = "Sincronizado com Google Drive (appDataFolder)";
+      triggerGoogleOAuth();
       closeSyncModal();
     }
 

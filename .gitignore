@@ -2,3 +2,7 @@
 Thumbs.db
 uploads/*
 !uploads/.gitkeep
+database/*.db
+database/*.db-wal
+database/*.db-shm
+!database/.htaccess
