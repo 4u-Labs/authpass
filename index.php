@@ -987,8 +987,8 @@ $v = time();
       </div>
     </a>
     <div class="header-actions">
-      <button class="btn-icon" id="btnSyncModal" title="Sincronização & Backup" onclick="openSyncModal()">
-        <i class="fab fa-google-drive"></i>
+      <button class="btn-icon" id="btnSyncModal" title="Nuvem Zero-Knowledge & Backup" onclick="openSyncModal()">
+        <i class="fas fa-cloud"></i>
       </button>
       <button class="btn-icon" id="btnLockVault" title="Bloquear Cofre" onclick="lockVault()">
         <i class="fas fa-lock"></i>
@@ -1021,7 +1021,7 @@ $v = time();
           </div>
         </div>
         <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
-          <span style="font-size:10px; background:#4285f4; color:#fff; padding:2px 8px; border-radius:20px; font-weight:700;">📁 Drive AuthPass</span>
+          <span style="font-size:10px; background:#4285f4; color:#fff; padding:2px 8px; border-radius:20px; font-weight:700;">☁️ Nuvem 4U</span>
           <a href="javascript:void(0)" onclick="disconnectCloud()" style="font-size:10.5px; color:var(--danger); text-decoration:underline;">Trocar Conta</a>
         </div>
       </div>
@@ -1497,13 +1497,6 @@ $v = time();
     // -------------------------------------------------------------
     // Google OAuth & Cloud Sync Config (SafePass Compatible)
     // -------------------------------------------------------------
-    const GDRIVE_FOLDER_NAME = 'AuthPass';
-    const GDRIVE_VAULT_FILE = 'authpass_vault.json';
-    const GDRIVE_TOKEN_KEY = 'authpass_gdrive_token';
-    const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email openid';
-    
-    let googleTokenClient = null;
-    let gdriveFolderId = localStorage.getItem('authpass_gdrive_folder_id') || null;
     let authPin = "";
 
     // -------------------------------------------------------------
@@ -1610,95 +1603,11 @@ $v = time();
         console.error('GIS Error:', e);
       }
 
-      // Inicializa token client para Google Drive (usado apenas em backup opcional no modal)
-      try {
-        if (google.accounts.oauth2) {
-          googleTokenClient = google.accounts.oauth2.initTokenClient({
-            client_id: window.GOOGLE_CLIENT_ID,
-            scope: GOOGLE_SCOPES,
-            callback: async (tokenResponse) => {
-              if (tokenResponse && tokenResponse.access_token) {
-                localStorage.setItem(GDRIVE_TOKEN_KEY, tokenResponse.access_token);
-                await getOrCreateAuthPassDriveFolder(tokenResponse.access_token);
-                await pullFromGoogleDrive(false);
-                showToast('Google Drive conectado!');
-              }
-            },
-            error_callback: (err) => {
-              console.error('Google Drive OAuth error:', err);
-              showToast('Erro ao conectar Google Drive.');
-            }
-          });
-        }
-      } catch(e) {
-        console.warn('OAuth2 Token client init:', e);
-      }
-    }
-
-    function triggerGoogleOAuth() {
-      if (!googleTokenClient) {
-        initGoogleOAuthClient();
-      }
-      if (googleTokenClient) {
-        googleTokenClient.requestAccessToken({ prompt: 'select_account' });
-      } else {
-        showToast('Inicializando serviço Google... Clique novamente.');
-      }
-    }
-
-    async function fetchGoogleUserProfile(token) {
-      showToast('Conectando com conta Google e Google Drive...');
-      try {
-        const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (!res.ok) throw new Error('Falha ao obter perfil Google');
-        const profile = await res.json();
-
-        // Autentica na API do AuthPass (SQLite)
-        const authRes = await fetch('index.php?action=google_auth', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: profile.email,
-            name: profile.name || '',
-            picture: profile.picture || '',
-            google_id: profile.sub || ''
-          })
-        });
-
-        const data = await authRes.json();
-        if (data.success && data.token) {
-          localStorage.setItem('authpass_cloud_token', data.token);
-          localStorage.setItem('authpass_cloud_user', JSON.stringify(data.user));
-          localStorage.setItem('authpass_active_email', data.user.email);
-
-          await getOrCreateAuthPassDriveFolder(token);
-
-          if (data.vault_data) {
-            const vd = data.vault_data;
-            if (vd.vault_encrypted) localStorage.setItem(VAULT_STORAGE_KEY, vd.vault_encrypted);
-            if (vd.salt) localStorage.setItem(SALT_STORAGE_KEY, vd.salt);
-            if (vd.verifier) localStorage.setItem(VERIFIER_STORAGE_KEY, vd.verifier);
-            if (vd.em_hash) localStorage.setItem(EM_HASH_STORAGE_KEY, vd.em_hash);
-            showToast(`Conta Google conectada (${data.user.email})! Cofre pronto.`);
-          } else {
-            showToast(`Conta Google conectada (${data.user.email})!`);
-          }
-
-          updateCloudUI();
-          checkVaultStatus();
-        }
-      } catch (e) {
-        console.error(e);
-        showToast('Erro ao sincronizar perfil Google.');
-      }
     }
 
     function disconnectCloud() {
       localStorage.removeItem('authpass_cloud_token');
       localStorage.removeItem('authpass_cloud_user');
-      localStorage.removeItem(GDRIVE_TOKEN_KEY);
       updateCloudUI();
       checkVaultStatus();
       showToast('Nuvem desconectada.');
@@ -1732,7 +1641,7 @@ $v = time();
         }
         if (authGoogleBtn) authGoogleBtn.style.display = 'none';
         if (authEmailGroup) authEmailGroup.style.display = 'none';
-        updateSyncUI(true, `Nuvem 4U & Google Drive (${user.email})`);
+        updateSyncUI(true, `Nuvem 4U Conectada (${user.email})`);
       } else {
         if (authConnected) authConnected.style.display = 'none';
         if (authGoogleBtn) authGoogleBtn.style.display = 'block';
@@ -1765,140 +1674,8 @@ $v = time();
     }
 
     // -------------------------------------------------------------
-    // Google Drive Folder & File Sync Engine
+    // Cloud Sync Engine (4U SQLite Zero-Knowledge)
     // -------------------------------------------------------------
-    async function getOrCreateAuthPassDriveFolder(token) {
-      if (gdriveFolderId) return gdriveFolderId;
-      try {
-        const query = encodeURIComponent(`name = '${GDRIVE_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`);
-        const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (searchRes.ok) {
-          const data = await searchRes.json();
-          if (data.files && data.files.length > 0) {
-            gdriveFolderId = data.files[0].id;
-            localStorage.setItem('authpass_gdrive_folder_id', gdriveFolderId);
-            return gdriveFolderId;
-          }
-        }
-
-        const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            name: GDRIVE_FOLDER_NAME,
-            mimeType: 'application/vnd.google-apps.folder'
-          })
-        });
-        if (createRes.ok) {
-          const folder = await createRes.json();
-          gdriveFolderId = folder.id;
-          localStorage.setItem('authpass_gdrive_folder_id', gdriveFolderId);
-          return gdriveFolderId;
-        }
-      } catch (e) {
-        console.warn('Erro na pasta Google Drive:', e);
-      }
-      return null;
-    }
-
-    async function pushToGoogleDrive(vaultPayload) {
-      const token = localStorage.getItem(GDRIVE_TOKEN_KEY);
-      if (!token || !vaultPayload) return;
-
-      try {
-        const folderId = await getOrCreateAuthPassDriveFolder(token);
-        if (!folderId) return;
-
-        const vaultBlob = new Blob([JSON.stringify(vaultPayload, null, 2)], { type: 'application/json' });
-
-        const query = encodeURIComponent(`name = '${GDRIVE_VAULT_FILE}' and '${folderId}' in parents and trashed = false`);
-        const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (searchRes.ok) {
-          const data = await searchRes.json();
-          if (data.files && data.files.length > 0) {
-            const fileId = data.files[0].id;
-            await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
-              method: 'PATCH',
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-              },
-              body: vaultBlob
-            });
-            updateSyncUI(true, 'Google Drive (Pasta AuthPass Sincronizada)');
-            return;
-          }
-        }
-
-        const form = new FormData();
-        form.append('metadata', new Blob([JSON.stringify({
-          name: GDRIVE_VAULT_FILE,
-          parents: [folderId]
-        })], { type: 'application/json' }));
-        form.append('file', vaultBlob);
-
-        await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}` },
-          body: form
-        });
-        updateSyncUI(true, 'Google Drive (Pasta AuthPass Sincronizada)');
-      } catch (err) {
-        console.warn('Erro ao sincronizar com Google Drive:', err);
-      }
-    }
-
-    async function pullFromGoogleDrive(silent = false) {
-      const token = localStorage.getItem(GDRIVE_TOKEN_KEY);
-      if (!token) return;
-
-      try {
-        const folderId = await getOrCreateAuthPassDriveFolder(token);
-        if (!folderId) return;
-
-        const query = encodeURIComponent(`name = '${GDRIVE_VAULT_FILE}' and '${folderId}' in parents and trashed = false`);
-        const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (searchRes.ok) {
-          const data = await searchRes.json();
-          if (data.files && data.files.length > 0) {
-            const mainFile = data.files[0];
-            localStorage.setItem('authpass_gdrive_file_id', mainFile.id);
-
-            const downloadRes = await fetch(`https://www.googleapis.com/drive/v3/files/${mainFile.id}?alt=media`, {
-              headers: { 'Authorization': `Bearer ${token}` }
-            });
-
-            if (downloadRes.ok) {
-              const remoteVault = await downloadRes.json();
-              if (remoteVault.vault_encrypted && remoteVault.salt) {
-                localStorage.setItem(VAULT_STORAGE_KEY, remoteVault.vault_encrypted);
-                localStorage.setItem(SALT_STORAGE_KEY, remoteVault.salt);
-                if (remoteVault.verifier) localStorage.setItem(VERIFIER_STORAGE_KEY, remoteVault.verifier);
-                if (remoteVault.em_hash) localStorage.setItem(EM_HASH_STORAGE_KEY, remoteVault.em_hash);
-                
-                updateSyncUI(true, 'Google Drive (Pasta AuthPass Sincronizada)');
-                if (!silent) showToast('Cofre sincronizado do Google Drive!');
-                checkVaultStatus();
-              }
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('Erro ao ler Google Drive:', err);
-      }
-    }
-
     async function pushToCloud() {
       const cipher = localStorage.getItem(VAULT_STORAGE_KEY);
       const salt = localStorage.getItem(SALT_STORAGE_KEY);
@@ -1919,10 +1696,6 @@ $v = time();
         em_hash: emHash
       };
 
-      // 1. Salva no Google Drive
-      pushToGoogleDrive(vaultPayload);
-
-      // 2. Salva na Nuvem 4U (SQLite Zero-Knowledge)
       try {
         const pushUrl = `index.php?action=push&email=${encodeURIComponent(email)}` + (token ? `&token=${encodeURIComponent(token)}` : '');
         await fetch(pushUrl, {
@@ -1930,7 +1703,7 @@ $v = time();
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ vault_data: vaultPayload, email })
         });
-        updateSyncUI(true, `Nuvem 4U & Google Drive (${email})`);
+        updateSyncUI(true, `Nuvem 4U Conectada (${email})`);
       } catch (err) {
         console.warn('Erro ao salvar na nuvem 4U:', err);
       }
@@ -1965,9 +1738,6 @@ $v = time();
       } catch (err) {
         console.warn('Erro ao puxar da nuvem 4U:', err);
       }
-
-      // Também sincroniza do Google Drive se logado
-      await pullFromGoogleDrive(silent);
     }
 
     function updateSyncUI(active, text) {
