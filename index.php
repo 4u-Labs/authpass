@@ -1314,7 +1314,7 @@ $v = time();
               <i class="fas fa-check-circle"></i> Sincronização Ativa
             </span>
           </div>
-          <div id="modalSyncEmailDisplay" style="font-size: 0.95rem; font-weight: 700; color: #fff; margin-bottom: 4px;">fbr4g4@gmail.com</div>
+          <div id="modalSyncEmailDisplay" style="font-size: 0.95rem; font-weight: 700; color: #fff; margin-bottom: 4px;">---</div>
           <p style="font-size: 0.78rem; color: var(--text-muted); line-height: 1.4; margin: 0;">
             Seu cofre é sincronizado automaticamente em segundo plano com a Nuvem Zero-Knowledge e a Extensão Chrome.
           </p>
@@ -1768,10 +1768,10 @@ $v = time();
       const salt = localStorage.getItem(SALT_STORAGE_KEY);
       const verifier = localStorage.getItem(VERIFIER_STORAGE_KEY);
       const emHash = localStorage.getItem(EM_HASH_STORAGE_KEY);
-      const email = localStorage.getItem('authpass_active_email') || 'fbr4g4@gmail.com';
+      const email = localStorage.getItem('authpass_active_email') || '';
       const token = localStorage.getItem('authpass_cloud_token');
 
-      if (!cipher) return;
+      if (!cipher || !email) return;
 
       const vaultPayload = {
         version: "1.0",
@@ -1797,8 +1797,9 @@ $v = time();
     }
 
     async function pullFromCloud(silent = false) {
-      const email = localStorage.getItem('authpass_active_email') || 'fbr4g4@gmail.com';
+      const email = localStorage.getItem('authpass_active_email') || '';
       const token = localStorage.getItem('authpass_cloud_token');
+      if (!email) return;
 
       try {
         const url = `index.php?action=pull&email=${encodeURIComponent(email)}` + (token ? `&token=${encodeURIComponent(token)}` : '');
@@ -1980,7 +1981,7 @@ $v = time();
       initGoogleOAuthClient();
       updateCloudUI();
 
-      const activeEmail = localStorage.getItem('authpass_active_email') || 'fbr4g4@gmail.com';
+      const activeEmail = localStorage.getItem('authpass_active_email') || '';
       // Tenta puxar dados existentes da nuvem 4U
       await pullFromCloud(true);
 
@@ -2532,7 +2533,7 @@ $v = time();
     // Sync & Backup Management
     // -------------------------------------------------------------
     function openSyncModal() {
-      const activeEmail = localStorage.getItem('authpass_active_email') || 'fbr4g4@gmail.com';
+      const activeEmail = localStorage.getItem('authpass_active_email') || '';
       const display = document.getElementById('modalSyncEmailDisplay');
       if (display) display.textContent = activeEmail;
       document.getElementById('modalSync').classList.add('active');
