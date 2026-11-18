@@ -240,7 +240,7 @@ header("Cache-Control: post-check=0, pre-check=0", false);
 header("Pragma: no-cache");
 header("Expires: Mon, 26 Jul 1997 05:00:00 GMT");
 header("Cross-Origin-Opener-Policy: same-origin-allow-popups");
-$googleClientId = '86183940183-qegicgt1h8biud5vagdhuuug6i68q5km.apps.googleusercontent.com';
+$googleClientId = '569266864432-pd09jbb5no9ekdhdr018fj643nopp817.apps.googleusercontent.com';
 $v = time();
 ?>
 <!DOCTYPE html>

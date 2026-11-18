@@ -6,3 +6,15 @@ database/*.db
 database/*.db-wal
 database/*.db-shm
 !database/.htaccess
+.env
+.env.local
+.config.php
+data/*.db
+data/*.sqlite
+*.db
+*.sqlite
+api_logs.txt
+*.log
+uploads/
+credentials.json
+.user_uploaded/
